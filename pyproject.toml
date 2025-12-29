@@ -1,0 +1,56 @@
+[project]
+name = "open-world-vf"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dpkt>=1.9.8",
+    "logging>=0.4.9.6",
+    "pandas>=2.3.1",
+    "pyshark>=0.6",
+    "scikit-learn>=1.7.1",
+    "tqdm>=4.67.1",
+    "torch>=2.5.1",
+    "torchvision>=0.20.1",
+    "optuna>=4.4.0",
+    "lightning>=2.5.3",
+    "tensorboard>=2.20.0",
+    "pyarrow>=21.0.0",
+    "openpyxl>=3.1.5",
+    "beautifulsoup4>=4.14.2",
+    "maturin>=1.10.2",
+    "matplotlib>=3.10.7",
+    "seaborn>=0.13.2",
+]
+
+
+[[index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" # pip换源
+default = true
+
+[tool.uv]
+python-install-mirror = "https://registry.npmmirror.com/-/binary/python-build-standalone/"   # 阿里源 Python换源
+
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu129", marker = "platform_system != 'Darwin'" },
+]
+torchvision = [
+  { index = "pytorch-cu129", marker = "platform_system != 'Darwin'" },
+]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.10.2",
+]
