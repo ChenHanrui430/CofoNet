@@ -1,7 +1,7 @@
 import argparse
 import os
-import sys
 import json
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -18,11 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, ConcatDataset, Dataset
-import lightning as pl
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning import LightningModule
-import torchmetrics
-from torch.optim.lr_scheduler import OneCycleLR
 
 # ==============================================================================
 # 1. Configuration 
@@ -30,6 +26,7 @@ from torch.optim.lr_scheduler import OneCycleLR
 # Use relative paths for portability
 BASE_PATH = './data/' 
 OUTPUT_DIR = './results'
+DEFAULT_MODEL_DIR = './model'
 
 SHAPES = {
     'sirinam_wf': 5000, 
@@ -39,20 +36,6 @@ SHAPES = {
     'schuster8': 480, 
     'SALT': 25000  
 } 
-
-# Best Hyperparameters Dictionary
-BEST_HYPERPARAMETERS = {
-    # CoFoNet + SALT (Ours)
-    "SALT_tor_youtube":{
-        "filters": 48,
-        "drop_path_rate": 0.35,
-        "weight_decay": 0.022,
-        "lr": 0.0024,
-        "fc_dropout": 0.6,
-        "batch_size": 112,
-        "factor": 0.51
-    },
-}
 
 class MemmapDataset(Dataset):
     def __init__(self, file_prefix, representation, data_points, target_label_name, in_memory=False, augment=False):
@@ -296,16 +279,6 @@ class MultiTaskTrafficNet(LightningModule):
             beta=0.999
         )
         
-        # --- Metrics ---
-        metrics_params = {"task": "multiclass", "num_classes": num_classes_vid}
-        self.train_acc_vid = torchmetrics.Accuracy(**metrics_params)
-        self.train_f1_vid = torchmetrics.F1Score(**metrics_params, average='macro')
-        self.train_f1_play = torchmetrics.F1Score(task="multiclass", num_classes=num_classes_play, average='macro')
-        
-        self.val_acc_vid = torchmetrics.Accuracy(**metrics_params)
-        self.val_f1_vid = torchmetrics.F1Score(**metrics_params, average='macro')
-        self.val_f1_play = torchmetrics.F1Score(task="multiclass", num_classes=num_classes_play, average='macro')
-
     def forward(self, x):
         x = self.stem(x)
         x = self.stages[0](x)
@@ -320,80 +293,6 @@ class MultiTaskTrafficNet(LightningModule):
         feat = self.shared_fc(combined)
         
         return self.head_vid(feat), self.head_play(feat), feat
-
-    def training_step(self, batch, batch_idx):
-        x, y_vid, y_play = batch
-        logits_vid, logits_play, _ = self(x) 
-        
-        loss_vid = self.criterion_vid(logits_vid, y_vid)
-        loss_play = self.criterion_play(logits_play, y_play)
-        loss = loss_vid + self.factor * loss_play
-        
-        preds_vid = torch.argmax(logits_vid, dim=1)
-        preds_play = torch.argmax(logits_play, dim=1)
-        
-        # 更新指标
-        self.train_acc_vid(preds_vid, y_vid)
-        self.train_f1_vid(preds_vid, y_vid)
-        self.train_f1_play(preds_play, y_play)
-        
-        # Log with sync_dist=True for Multi-GPU
-        self.log('train_loss', loss, on_step=False, on_epoch=True, sync_dist=True)
-        self.log('train/acc_vid', self.train_acc_vid, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('train/f1_vid', self.train_f1_vid, on_step=False, on_epoch=True, sync_dist=True)
-        
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        x, y_vid, y_play = batch
-        logits_vid, logits_play, _ = self(x)
-        
-        loss_vid = self.criterion_vid(logits_vid, y_vid)
-        loss_play = self.criterion_play(logits_play, y_play)
-        loss = loss_vid + self.factor * loss_play
-        
-        preds_vid = torch.argmax(logits_vid, dim=1)
-        preds_play = torch.argmax(logits_play, dim=1)
-        
-        # Video Metrics
-        self.val_acc_vid(preds_vid, y_vid)
-        self.val_f1_vid(preds_vid, y_vid)
-        
-        # Playlist Metrics
-        self.val_f1_play(preds_play, y_play)
-        
-        # Logging
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('val/f1_vid', self.val_f1_vid, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('val/acc_vid', self.val_acc_vid, on_step=False, on_epoch=True, sync_dist=True)
-        self.log('val/f1_play', self.val_f1_play, on_step=False, on_epoch=True, sync_dist=True)
-        
-        return loss
-
-    def configure_optimizers(self):
-        decay = []
-        no_decay = []
-        for name, param in self.named_parameters():
-            if not param.requires_grad: continue
-            if 'bias' in name or 'bn' in name or 'norm' in name:
-                no_decay.append(param)
-            else:
-                decay.append(param)
-
-        optimizer_grouped_parameters = [
-            {'params': decay, 'weight_decay': self.weight_decay},
-            {'params': no_decay, 'weight_decay': 0.0}
-        ]
-
-        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=self.lr)
-        scheduler = OneCycleLR(
-            optimizer, 
-            max_lr=self.lr, 
-            total_steps=self.trainer.estimated_stepping_batches,
-            pct_start=0.3,
-            div_factor=25.0
-        )
-        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
 class AcademicEvaluator:
     """
@@ -823,7 +722,7 @@ class AcademicEvaluator:
         ax_ins.set_title('Zoom: Low FPR', fontsize=10)
         ax_ins.grid(True, linestyle=':', alpha=0.5)
         
-        save_path = os.path.join(self.output_path, 'roc_curve_ccs_style.pdf')
+        save_path = os.path.join(self.output_path, 'roc_curve.pdf')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
         print(f"ROC Curve saved to {save_path}")
@@ -839,163 +738,68 @@ class AcademicEvaluator:
 # ==============================================================================
 # 3. Helpers
 # ==============================================================================
-def get_combined_samples_per_play(monitored_train_prefix, unmonitored_train_prefix, is_open_world):
-    """Calculate combined class distribution for Loss weighting"""
-    p_mon = f"{monitored_train_prefix}_label_playlist_code.npy"
-    if os.path.exists(p_mon):
-        counts_mon = np.bincount(np.load(p_mon, mmap_mode='r').astype(int))
-    else:
-        counts_mon = np.array([1]*7) 
+def find_default_checkpoint(model_dir=DEFAULT_MODEL_DIR):
+    checkpoints = sorted(Path(model_dir).glob("*.ckpt"))
+    if not checkpoints:
+        raise FileNotFoundError(f"No .ckpt file found in {model_dir}")
+    return str(checkpoints[0])
 
-    if len(counts_mon) < 8:
-        counts_mon = np.pad(counts_mon, (0, 7 - len(counts_mon)), 'constant')
 
-    if not is_open_world:
-        return np.where(counts_mon == 0, 1, counts_mon)
-
-    p_unmon = f"{unmonitored_train_prefix}_label_playlist_code.npy"
-    if os.path.exists(p_unmon):
-        labels_un = np.load(p_unmon, mmap_mode='r').astype(int)
-        counts_un = np.bincount(labels_un)
-        
-        max_len = max(len(counts_mon), len(counts_un))
-        combined = np.zeros(max_len, dtype=int)
-        combined[:len(counts_mon)] += counts_mon
-        combined[:len(counts_un)] += counts_un
-        
-        combined = np.where(combined == 0, 1, combined)
-        print(f"[Class Balance] Mixed Distribution: {combined}")
-        return combined
-    else:
-        print(f"Warning: Open World enabled but file not found: {p_unmon}")
-        return np.where(counts_mon == 0, 1, counts_mon)
-    
-def get_samples_per_play(path):
-    p = f"{path}_label_playlist_code.npy"
-    if not os.path.exists(p): return [1]*7
-    counts = np.bincount(np.load(p, mmap_mode='r').astype(int))
-    if len(counts) < 7: counts = np.pad(counts, (0, 7-len(counts)), 'constant', constant_values=1)
-    return np.where(counts==0, 1, counts)
+def resolve_representation_root(data_root, representation):
+    candidates = [
+        Path(data_root) / representation,
+        Path(data_root) / "processed" / representation,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    expected = " or ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(
+        f"Could not find the {representation} data directory. Expected {expected}. "
+        "Please extract data.7z into the project root first."
+    )
 
 def main():
-    parser = argparse.ArgumentParser(description="Multi-Task TrafficNet Evaluator")
-    parser.add_argument('--mode', type=str, required=True, choices=['train', 'eval'], help="Train or Eval")
+    parser = argparse.ArgumentParser(description="CoFoNet checkpoint evaluator for the public validation/test splits")
+    parser.add_argument('--mode', type=str, default='eval', choices=['eval'], help="Only evaluation is supported in this anonymized release")
     parser.add_argument('--rep', type=str, default='SALT', help="Representation (Default: SALT)")
     parser.add_argument('--proto', type=str, default='tor', help="Protocol")
     parser.add_argument('--plat', type=str, default='youtube', help="Platform")
-    parser.add_argument('--checkpoint', type=str, help="Path to .ckpt file (Required for eval)")
+    parser.add_argument('--checkpoint', type=str, default=None, help="Path to .ckpt file. Defaults to the first checkpoint in ./model/")
+    parser.add_argument('--data_root', type=str, default=BASE_PATH, help="Root directory created after extracting data.7z")
+    parser.add_argument('--split', type=str, default='test', choices=['val', 'test'], help="Public split to evaluate")
     parser.add_argument('--open_world', default=False, action='store_true', help="Enable Open World (N+1 Class) Mode")
     args = parser.parse_args()
 
     # Path Config
     mod_rep = args.rep
     
-    mon_dir = os.path.join(BASE_PATH, f"{mod_rep}/monitored_{args.proto}")
-    unmon_dir = os.path.join(BASE_PATH, f"{mod_rep}/unmonitored_{args.proto}")
+    rep_root = resolve_representation_root(args.data_root, mod_rep)
+    mon_dir = os.path.join(rep_root, f"monitored_{args.proto}")
+    unmon_dir = os.path.join(rep_root, f"unmonitored_{args.proto}")
     
     key = f"{args.rep}_{args.proto}_{args.plat}"
     input_length = SHAPES.get(args.rep, 25000)
-    in_channels = 2 if args.rep == 'SALT' or 'dschuster' in args.rep else 1
-    
-    # Class Definitions
-    if args.open_world:
-        num_classes_vid = 290
-        num_classes_play = 8
-        task_suffix = "_OpenWorld"
-    else:
-        # Closed World
-        num_classes_vid = 289
-        num_classes_play = 7
-        task_suffix = ""
+    task_suffix = "_OpenWorld" if args.open_world else ""
 
-    train_prefix_mon = os.path.join(mon_dir, 'train')
-    train_prefix_unmon = os.path.join(unmon_dir, 'train')
-    samples_per_play = get_combined_samples_per_play(train_prefix_mon, train_prefix_unmon, args.open_world)
+    eval_checkpoint = args.checkpoint or find_default_checkpoint()
+    print(f"Loading checkpoint: {eval_checkpoint}")
+    model = MultiTaskTrafficNet.load_from_checkpoint(eval_checkpoint, weights_only=False)
 
-    # ==========================================
-    # 2. Train Mode
-    # ==========================================
-    if args.mode == 'train':
-        hype = BEST_HYPERPARAMETERS.get(key, BEST_HYPERPARAMETERS['SALT_tor_youtube'])
-        print(f"Training {key} {task_suffix} with params: {hype}")
-        
-        # Load Monitored Data
-        train_ds = MemmapDataset(os.path.join(mon_dir, 'train'), args.rep, input_length, 'vid_adjusted', augment=False)
-        val_ds = MemmapDataset(os.path.join(mon_dir, 'val'), args.rep, input_length, 'vid_adjusted')
-        
-        # Load Unmonitored Data if Open World
-        if args.open_world:
-            print("[Dataset] Mixing Unmonitored data into Training set...")
-            try:
-                train_ds_un = MemmapDataset(os.path.join(unmon_dir, 'train'), args.rep, input_length, 'vid_adjusted', augment=False)
-                val_ds_un = MemmapDataset(os.path.join(unmon_dir, 'val'), args.rep, input_length, 'vid_adjusted')
-                
-                train_ds = ConcatDataset([train_ds, train_ds_un])
-                val_ds = ConcatDataset([val_ds, val_ds_un])
-            except FileNotFoundError as e:
-                print(f"Failed to load Unmonitored data: {e}")
-                return
-
-        # Dataloader
-        train_loader = DataLoader(train_ds, batch_size=hype['batch_size'], shuffle=True, num_workers=12, pin_memory=True)
-        val_loader = DataLoader(val_ds, batch_size=hype['batch_size'], num_workers=12)
-        
-        # Model Init
-        model = MultiTaskTrafficNet(
-            in_channels, 
-            input_length, 
-            num_classes_vid, 
-            num_classes_play,
-            samples_per_play, 
-            hype, 
-            lr=hype['lr']
-        )
-        
-        # Callbacks
-        ckpt_cb = ModelCheckpoint(
-            monitor='val/f1_vid', 
-            mode='max', 
-            filename='best-{epoch}-{val/f1_vid:.4f}', 
-            save_top_k=1
-        )
-        early_stop = EarlyStopping('val/f1_vid', patience=15, mode='max')
-        
-        trainer = pl.Trainer(
-            max_epochs=80, 
-            accelerator="gpu", 
-            devices=[0], 
-            callbacks=[ckpt_cb, early_stop],
-            log_every_n_steps=10
-        )
-        
-        trainer.fit(model, train_loader, val_loader)
-        print(f"Training finished. Best model path: {ckpt_cb.best_model_path}")
-        
-        eval_checkpoint = ckpt_cb.best_model_path
-        model = MultiTaskTrafficNet.load_from_checkpoint(eval_checkpoint, samples_per_class_play=samples_per_play)
-
-    # ==========================================
-    # 3. Eval Mode
-    # ==========================================
-    else:
-        if not args.checkpoint:
-            print(" Eval mode requires --checkpoint path"); return
-        eval_checkpoint = args.checkpoint
-        print(f"Loading checkpoint: {eval_checkpoint}")
-        model = MultiTaskTrafficNet.load_from_checkpoint(eval_checkpoint, samples_per_class_play=samples_per_play)
-    test_ds = MemmapDataset(os.path.join(mon_dir, 'test'), args.rep, input_length, 'vid_adjusted', augment=False)
+    split_prefix = os.path.join(mon_dir, args.split)
+    test_ds = MemmapDataset(split_prefix, args.rep, input_length, 'vid_adjusted', augment=False)
     
     if args.open_world:
         print("[Dataset] Mixing Unmonitored data into Test set...")
         try:
-            test_ds_un = MemmapDataset(os.path.join(unmon_dir, 'test'), args.rep, input_length, 'vid_adjusted', augment=False)
+            test_ds_un = MemmapDataset(os.path.join(unmon_dir, args.split), args.rep, input_length, 'vid_adjusted', augment=False)
             test_ds = ConcatDataset([test_ds, test_ds_un])
         except FileNotFoundError:
-            print("Unmonitored test set not found, evaluating on Monitored set only.")
+            print(f"Unmonitored {args.split} set not found, evaluating on Monitored set only.")
 
     test_loader = DataLoader(test_ds, batch_size=128, num_workers=16, shuffle=False)
     
-    task_name = f"{key}_{args.mode}_results{task_suffix}"
+    task_name = f"{key}_{args.split}_results{task_suffix}"
     evaluator = AcademicEvaluator(model, test_loader, os.path.join(OUTPUT_DIR, task_name))
     
     evaluator.run()
@@ -1004,6 +808,5 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
     main()
     
-    # Example Commands for Reviewers:
-    # python evaluate.py --mode train --rep SALT --proto tor --plat youtube
-    # python evaluate.py --mode eval --rep SALT --proto tor --plat youtube --checkpoint ./checkpoints/best_model.ckpt
+    # Example command for reviewers:
+    # python evaluate.py --rep SALT --proto tor --plat youtube --checkpoint ./model/f1_vid=0.5064.ckpt

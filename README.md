@@ -1,98 +1,117 @@
 # Unveiling the Semantic Trail
 
-This repository contains the source code and evaluation artifacts for the paper **Unveiling the Semantic Trail** submitted to **ACM CCS**.
+This repository contains the anonymized evaluation artifacts for the paper **Unveiling the Semantic Trail**.
 
-These artifacts are designed to verify the reproducibility of our results, including the SALT feature extraction efficacy and the CoFoNet model performance.
+For the anonymous review period, this release is intentionally limited to checkpoint-based evaluation. It includes the public validation/test splits and a pretrained CoFoNet checkpoint.
 
-## Repository Contents
+## Review-Period Release Scope
 
-* **`evaluate.py`**: The main entry point for training and evaluation.
-* **`pyproject.toml` / `uv.lock`**: Dependency definitions for exact environment reproduction.
-* **`data/`**: Directory for storing the pre-processed feature datasets.
-* **`results/`**: Directory where logs, metrics, and visualization plots will be saved.
+The current release provides:
+
+* **`evaluate.py`**: Evaluation-only entry point for loading the released checkpoint and running validation/test inference.
+* **`data.7z`**: Public validation and test splits used for anonymous artifact review.
+* **`model/`**: Released checkpoint directory. The default checkpoint is `model/f1_vid=0.5064.ckpt`.
+* **`pyproject.toml` / `uv.lock`**: Dependency definitions for environment reproduction.
+* **`results/`**: Directory where evaluation metrics and visualization plots are written.
+
+After the paper is accepted, we will publicly release the complete dataset and the full code.
 
 ---
 
-##  Environment Setup
+## Environment Setup
 
-We use **[uv](https://github.com/astral-sh/uv)** for ultra-fast, reliable, and cross-platform dependency management.
+We use **[uv](https://github.com/astral-sh/uv)** for fast and reproducible dependency management.
 
 ### 1. Install uv
-If you do not have `uv` installed, please install it via pip or curl:
+
+If `uv` is not installed, install it with one of the following commands:
 
 ```bash
-# Via pip (Recommended)
+# Via pip
 pip install uv
 
-# Or via curl (Linux/macOS)
-curl -LsSf [https://astral.sh/uv/install.sh](https://astral.sh/uv/install.sh) | sh
+# Or via curl on Linux/macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Sync Environment
-Navigate to the project root directory and run the following command. This will automatically create a virtual environment and install all dependencies (PyTorch, Lightning, Scikit-learn, etc.) with locked versions.
+### 2. Sync the Environment
+
+From the project root, run:
+
 ```bash
 uv sync
 ```
 
-To ensure the scripts run correctly, please verify that the pre-processed datasets  are placed in the ./data/processed/ directory.
+### 3. Extract the Public Validation/Test Data
+
+Extract `data.7z` into the project root:
 
 ```bash
-7z x data.zip
+7z x data.7z
 ```
 
-The expected directory structure is:
-``` bash
-.
-├── evaluate.py
-├── pyproject.toml
-├── uv.lock
-├── results/
-└── data/
-    └── processed/
-        └── SALT/
-            ├── monitored_tor/
-            │   ├── train_features.npy
-            │   ├── train_label_vid_adjusted.npy
-            │   └── ...
-            └── unmonitored_tor/
-                ├── train_features.npy
-                └── ...
+The evaluator supports either of the following extracted layouts:
+
+```bash
+data/
+└── SALT/
+    └── monitored_tor/
+        ├── val_features.npy
+        ├── val_label_vid_adjusted.npy
+        ├── val_label_playlist_code.npy
+        ├── test_features.npy
+        ├── test_label_vid_adjusted.npy
+        └── test_label_playlist_code.npy
 ```
+
+or:
+
+```bash
+data/
+└── processed/
+    └── SALT/
+        └── monitored_tor/
+            ├── val_features.npy
+            ├── val_label_vid_adjusted.npy
+            ├── val_label_playlist_code.npy
+            ├── test_features.npy
+            ├── test_label_vid_adjusted.npy
+            └── test_label_playlist_code.npy
+```
+
+If open-world evaluation data is present, place the corresponding files under `unmonitored_tor/` with the same `val_*` or `test_*` naming convention.
 
 ## Usage Instructions
 
-1. Training (Closed World)
-To train the CoFoNet model from scratch using the SALT representation on the Tor-YouTube dataset:
+### Evaluate the Released Checkpoint on the Test Set
+
+The default command loads the checkpoint from `model/` and evaluates the public test split:
 
 ```bash
-uv run evaluate.py --mode train --rep SALT --proto tor --plat youtube
+uv run evaluate.py --rep SALT --proto tor --plat youtube
 ```
 
-2. Evaluation (Closed World)
+Equivalent explicit command:
 
-To evaluate a pre-trained checkpoint on the test set and generate metrics:
 ```bash
-# Please replace the path with the actual checkpoint file provided
-uv run evaluate.py --mode eval \
+uv run evaluate.py \
     --rep SALT \
     --proto tor \
     --plat youtube \
-    --checkpoint ./results/checkpoints/best_model.ckpt
+    --split test \
+    --checkpoint ./model/f1_vid=0.5064.ckpt
 ```
 
-3. Open World Evaluation (Dataset too big)
-o evaluate the model in the Open World setting (identifying unmonitored background traffic):
-```bash 
-uv run evaluate.py --mode eval \
+### Evaluate the Validation Split
+
+```bash
+uv run evaluate.py \
     --rep SALT \
     --proto tor \
     --plat youtube \
-    --open_world \
-    --checkpoint ./results/checkpoints/best_model_openworld.ckpt
+    --split val
 ```
-
-After running the evaluation, the following results will be generated in the ./results/ directory
 
 ## Anonymity Statement
 
-This repository has been fully anonymized for double-blind review. All personal identifiers, institutional metadata, and absolute paths have been removed.
+This repository has been anonymized for double-blind review. Personal identifiers, institutional metadata, and absolute paths have been removed. During review. The complete dataset and full source code will be released after paper acceptance.
