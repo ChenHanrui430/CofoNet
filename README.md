@@ -1,8 +1,8 @@
 # Unveiling the Semantic Trail
 
-This repository contains the anonymized evaluation artifacts for the paper **Unveiling the Semantic Trail**.
+This repository contains the evaluation artifacts for the paper.
 
-For the anonymous review period, this release is intentionally limited to checkpoint-based evaluation. It includes the public validation/test splits and a pretrained CoFoNet checkpoint.
+For thereview period, this release is intentionally limited to checkpoint-based evaluation. It includes the public validation/test splits and a pretrained CoFoNet checkpoint.
 
 ## Review-Period Release Scope
 
