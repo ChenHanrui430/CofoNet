@@ -1,4 +1,4 @@
-# Unveiling the Semantic Trail
+# CoFonet
 
 This repository contains the evaluation artifacts for the paper.
 
