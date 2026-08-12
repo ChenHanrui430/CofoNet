@@ -9,7 +9,7 @@ For thereview period, this release is intentionally limited to checkpoint-based 
 The current release provides:
 
 * **`evaluate.py`**: Evaluation-only entry point for loading the released checkpoint and running validation/test inference.
-* **`data.7z`**: Public validation and test splits used for anonymous artifact review.
+* **`data.7z`**: Public validation and test splits used for review.
 * **`model/`**: Released checkpoint directory. The default checkpoint is `model/f1_vid=0.5064.ckpt`.
 * **`pyproject.toml` / `uv.lock`**: Dependency definitions for environment reproduction.
 * **`results/`**: Directory where evaluation metrics and visualization plots are written.
@@ -112,6 +112,4 @@ uv run evaluate.py \
     --split val
 ```
 
-## Anonymity Statement
-
-This repository has been anonymized for double-blind review. Personal identifiers, institutional metadata, and absolute paths have been removed. During review. The complete dataset and full source code will be released after paper acceptance.
+ The complete dataset and full source code will be released after paper acceptance.
